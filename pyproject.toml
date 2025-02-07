@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools", "setuptools_scm", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctwoodgrad"
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "diplib",
+    "pyevtk",
+]
+
+[tool.setuptools_scm]
