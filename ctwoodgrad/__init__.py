@@ -2,7 +2,6 @@ from .imgfunctions import (
     findInterMode,
     segmentAir,
     getMaskStats,
-    getDensity,
     getFibreTensor,
 )
 
