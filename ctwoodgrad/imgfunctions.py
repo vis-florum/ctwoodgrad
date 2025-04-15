@@ -77,10 +77,10 @@ def getMaskStats(img, mask):
 
     return mean, median, std_dev
 
-def getFibreTensor(img):
+def getFibreTensor(img, sigma=.7, omega=1.5):
     '''Fibre estimations in the object'''
     try:
-        R, T, L = getFCS(img)
+        R, T, L = getFCS(img, sigma=sigma, omega=omega)
         return R, T, L
     except Exception as e:
         logging.error(f"getFibreTensor failed: {e}")
