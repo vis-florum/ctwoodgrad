@@ -10,6 +10,7 @@ from .gradientanalysis import (
     getFCS,
     getFibreAlignment,
     findEWLW,
+    exportToVTK,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "getFCS",
     "getFibreAlignment",
     "findEWLW",
+    "exportToVTK"
 ]

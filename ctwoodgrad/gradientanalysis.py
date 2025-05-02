@@ -1,5 +1,6 @@
 import diplib as dip
 import numpy as np
+from pyevtk.hl import imageToVTK
 import logging
 
 
@@ -21,10 +22,6 @@ def getFCS(img, sigma=.7, omega=1.5):
     # Normalisation
     imgn = img - np.min(img)
     imgn = imgn / np.max(imgn)
-
-    if dip.AreDimensionsReversed():
-        logging.debug("diplib.ReverseDimensions()")
-        dip.ReverseDimensions()
 
     g = dip.Gradient(imgn,sigmas=sigma)
     S = g @ dip.Transpose(g)
@@ -63,9 +60,6 @@ def findEWLW(img, mask_wood):
     '''Find the EW / LW content of the wood mask using curvature analysis'''
     imgn = img - np.min(img)
     imgn = imgn / np.max(imgn)
-
-    if dip.AreDimensionsReversed():
-        dip.ReverseDimensions()
     
     logging.debug("Building Hessian... ")
     H = dip.Hessian(imgn)
@@ -106,94 +100,56 @@ def findEWLW(img, mask_wood):
 
 ################# VISUALISATIONS
 
-# Needs: from pyevtk.hl import imageToVTK
-# requires pyevtk
-
-def createVTK(outfile, rho, mask_wood, labels_ewlw, dipR, dipT, dipL, slices=None):
-    '''Create a VTK file from the image and the FCS'''
-    from pyevtk.hl import imageToVTK
+def prepareDirsVTK(dip_vecs):
+    """Convert a DIPlib vector image into a (fx, fy, fz) Fortran-style tuple."""
+    if dip.AreDimensionsReversed(): # this is standard order in diplib
+        fx = np.asfortranarray(dip_vecs(2))
+        fy = np.asfortranarray(dip_vecs(1))
+        fz = np.asfortranarray(dip_vecs(0))
+    else:
+        fx = np.asfortranarray(dip_vecs(0))
+        fy = np.asfortranarray(dip_vecs(1))
+        fz = np.asfortranarray(dip_vecs(2))
     
-    if slices is not None:
-        rho = rho[slices[0]:slices[1],:,:]
-        mask_wood = mask_wood[slices[0]:slices[1],:,:]
-        labels_ewlw = labels_ewlw[slices[0]:slices[1],:,:]
-        dipR = dipR[slices[0]:slices[1],:,:]
-        dipT = dipT[slices[0]:slices[1],:,:]
-        dipL = dipL[slices[0]:slices[1],:,:]
-        
+    return (fx, fy, fz)
 
-    def prepareDirsVTK(v):
-        v = np.array(v)
-        v = np.asfortranarray(v) # Need fortran order for vectors in imageToVTK
-        if dip.AreDimensionsReversed():
-            vx = v[:,:,:,2]
-            vy = v[:,:,:,1]
-            vz = v[:,:,:,0]
+
+def processField(value):
+    """Prepare data field based on whether it's a DIPlib image or NumPy array."""
+    if isinstance(value, dip.Image):
+        if value.TensorElements() == 3:
+            # It's a vector field
+            return prepareDirsVTK(value)
+        elif value.TensorElements() == 1:
+            # Scalar image
+            return np.asfortranarray(value)
         else:
-            vx = v[:,:,:,0]
-            vy = v[:,:,:,1]
-            vz = v[:,:,:,2]
-        
-        return (vx, vy, vz)
-
-    rdir = prepareDirsVTK(dipR)
-    tdir = prepareDirsVTK(dipT)
-    ldir = prepareDirsVTK(dipL)
-    woodmask = mask_wood.astype("uint16")
-
-    imageToVTK(outfile, pointData = {"density" : rho, "wood" : woodmask, "EW-LW" : labels_ewlw,
-                                     "Rdir" : rdir, "Tdir" : tdir, "Ldir" : ldir})
-    
-
-def fibreToVTK(outfile, dipR, dipT, dipL):
-    '''Create a VTK file from FCS'''
-    from pyevtk.hl import imageToVTK
-
-    def prepareDirsVTK(v):
-        v = np.array(v)
-        v = np.asfortranarray(v) # Need fortran order for vectors in imageToVTK
-        if dip.AreDimensionsReversed():
-            vx = v[:,:,:,2]
-            vy = v[:,:,:,1]
-            vz = v[:,:,:,0]
+            raise ValueError(f"Unsupported number of tensor elements for VTK export: {value.TensorElements()}")
+    elif isinstance(value, np.ndarray):
+        if np.issubdtype(value.dtype, np.integer):
+            return value.astype(np.uint16)
         else:
-            vx = v[:,:,:,0]
-            vy = v[:,:,:,1]
-            vz = v[:,:,:,2]
-        
-        return (vx, vy, vz)
-
-    rdir = prepareDirsVTK(dipR)
-    tdir = prepareDirsVTK(dipT)
-    ldir = prepareDirsVTK(dipL)
-
-    imageToVTK(outfile, pointData = {"Rdir" : rdir, "Tdir" : tdir, "Ldir" : ldir})
+            return value
+    else:
+        raise TypeError(f"Unsupported type for VTK export: {type(value)}")
     
-    
-def fibreRhoToVTK(outfile, rho, dipR, dipT, dipL):
-    '''Create a VTK file from FCS'''
-    from pyevtk.hl import imageToVTK
 
-    def prepareDirsVTK(v):
-        v = np.array(v)
-        v = np.asfortranarray(v) # Need fortran order for vectors in imageToVTK
-        if dip.AreDimensionsReversed():
-            vx = v[:,:,:,2]
-            vy = v[:,:,:,1]
-            vz = v[:,:,:,0]
-        else:
-            vx = v[:,:,:,0]
-            vy = v[:,:,:,1]
-            vz = v[:,:,:,2]
-        
-        return (vx, vy, vz)
+def exportToVTK(outfile, **kwargs):
+    """
+    General-purpose VTK exporter. Automatically handles dip.Image and numpy arrays.
+    Converts:
+      - DIPlib vector images to VTK vector fields
+      - DIPlib scalar images to Fortran-style arrays
+      - int numpy arrays to uint16
+      - other numpy arrays left as-is
+    """
+    pointData = {}
+    for key, val in kwargs.items():
+        pointData[key] = processField(val)
 
-    rdir = prepareDirsVTK(dipR)
-    tdir = prepareDirsVTK(dipT)
-    ldir = prepareDirsVTK(dipL)
+    imageToVTK(outfile, pointData=pointData)
+    return
 
-    imageToVTK(outfile, pointData = {"density" : rho, "Rdir" : rdir, "Tdir" : tdir, "Ldir" : ldir})
-    
 
 
 
@@ -281,82 +237,3 @@ def fibreRhoToVTK(outfile, rho, dipR, dipT, dipL):
 # # 2D histogram of L_phi and L_th
 # plt.hist2d(L_phi, L_th, bins=300)
 # plt.show()
-
-
-
-
-
-
-
-
-
-# #################################################################################################################
-# # Visualisations
-
-
-
-# sigma = .7
-# omega = 1.5
-# v1, v2, v3, energy, cyl, plan = getFCS(imgn, sigma, omega)
-# v1, v2, v3, energy, cyl, plan = getFCSinv(img, sigma, omega)
-
-# GST = dip.StructureTensor(imgn, gradientSigmas=sigma, tensorSigmas=omega)
-# L_phi, L_th = dip.StructureTensorAnalysis(GST,outputs=["phi3", "theta3"])
-
-# energy = np.array(energy)
-# cyl = np.array(cyl)
-# plan = np.array(plan)
-# phi = np.array(L_phi)
-# theta = np.array(L_th)
-
-# def getOrientationData(v):
-#     v = np.array(v)
-#     v = np.asfortranarray(v) # Need fortran order for vectors in imageToVTK
-#     if dip.AreDimensionsReversed():
-#         vx = v[:,:,:,2]
-#         vy = v[:,:,:,1]
-#         vz = v[:,:,:,0]
-#     else:
-#         vx = v[:,:,:,0]
-#         vy = v[:,:,:,1]
-#         vz = v[:,:,:,2]
-    
-#     return (vx, vy, vz)
-
-# R = getOrientationData(v1)
-# T = getOrientationData(v2)
-# L = getOrientationData(v3)
-
-
-# outfile = os.path.join(out_dir, id + "_orientations")
-# # outfile = os.path.join(out_dir, "ellipsoid_orients")
-# imageToVTK(outfile, pointData = {"density" : density_data, "Rdir" : R, "Tdir" : T, "Ldir" : L,
-#                                  "energy" : energy, "cyl" : cyl, "plan" : plan})
-
-# outfile = os.path.join(out_dir, id + "_orientations_inv")
-# imageToVTK(outfile, pointData = {"density" : img, "Rdir" : R, "Tdir" : T, "Ldir" : L,
-#                                  "energy" : energy, "cyl" : cyl, "plan" : plan,
-#                                  "phi" : phi, "theta" : theta})
-
-
-
-# # Hessian
-# H = dip.Hessian(imgn)
-# H.Show()
-
-# # Hessian energy (sum of eigenvalues)
-# eigenvalues, eigenvectors = dip.EigenDecomposition(H)
-# E = dip.Trace(eigenvalues)
-# E.Show()
-
-# h1 = eigenvectors.TensorColumn(0)
-# h2 = eigenvectors.TensorColumn(1)
-# h3 = eigenvectors.TensorColumn(2)
-
-# E = np.array(E)
-
-# imageToVTK(outfile, pointData = {"density" : density_data, "Rdir" : R, "Tdir" : T, "Ldir" : L,
-#                                  "HessE" : E,
-#                                  "energy" : energy, "cyl" : cyl, "plan" : plan})
-
-
