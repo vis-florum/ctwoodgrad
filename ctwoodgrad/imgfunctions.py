@@ -31,6 +31,36 @@ def findInterMode(img, rho_min, rho_max):
 
 #     return mask_wood, t_w
 
+def fillCavities(mask):
+    '''
+    Bit more general than filling holes, as it also fills cavities
+    that are not connected to the background.
+    '''
+    
+    L_object = dip.Label(mask, mode="largest")    # solid label is 1
+    B_object = L_object > 0
+
+    L_internalobjects = dip.Label(~B_object, boundaryCondition=["remove","remove","remove"])   # Remove border-touching objects
+
+    # Map the labels to 1 + label_nr (shift all by 1)
+    labels_internalobjects = dip.ListObjectLabels(L_internalobjects)    # BG 0 i not included
+    lut = np.zeros(len(labels_internalobjects) + 1, dtype=np.uint32)
+    lut[1:] = np.array(labels_internalobjects) + 1
+    L_internalobjects = dip.LookupTable(lut).Apply(L_internalobjects)
+    assert len(dip.ListObjectLabels(L_internalobjects)) == len(lut) - 1
+    assert np.min(dip.ListObjectLabels(L_internalobjects)) == 2 
+
+    L_object_and_internals = L_object | L_internalobjects  # solid is label 1, pores start at label 2
+
+    # Fill pores using Graph Representation of the regions
+    # If edge weights are large, then the relative areag connecting the regions is small
+    G_solid_and_internals = dip.RegionAdjacencyGraph(L_object_and_internals, mode="touching")    # region with ID 0 (the background) is not included in the graph
+    MSF_solid_and_internals = G_solid_and_internals.MinimumSpanningForest([1])  # Only the regions touching label 1
+
+    L_closed = dip.Relabel(L_object_and_internals,MSF_solid_and_internals)
+    B_closed = L_closed > 0
+    return B_closed
+
 def segmentAir(img, max_rho: int = 1500):
     '''Segment air from wood using intermode threshold and fill holes.'''
 
@@ -47,7 +77,8 @@ def segmentAir(img, max_rho: int = 1500):
     mask = dip.FixedThreshold(label, 1)
 
     # Fill holes
-    mask = dip.FillHoles(mask, connectivity=2)
+    # mask = dip.FillHoles(mask, connectivity=2)
+    mask = fillCavities(mask)
 
     return np.asarray(mask), t_w
 

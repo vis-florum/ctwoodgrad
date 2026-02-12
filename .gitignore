@@ -29,3 +29,4 @@ dist/
 *.dicom
 *.dcm
 *.tiff
+*.vti
