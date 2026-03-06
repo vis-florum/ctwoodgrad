@@ -1,5 +1,6 @@
 from .imgfunctions import (
     findInterMode,
+    fillCavities,
     segmentAir,
     getMaskStats,
     getFibreTensor,
@@ -15,6 +16,7 @@ from .gradientanalysis import (
 
 __all__ = [
     "findInterMode",
+    "fillCavities",
     "segmentAir",
     "getMaskStats",
     "getDensity",

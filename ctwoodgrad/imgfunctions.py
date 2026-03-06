@@ -40,10 +40,13 @@ def fillCavities(mask):
     L_object = dip.Label(mask, mode="largest")    # solid label is 1
     B_object = L_object > 0
 
-    L_internalobjects = dip.Label(~B_object, boundaryCondition=["remove","remove","remove"])   # Remove border-touching objects
+    L_internalobjects = dip.Label(~B_object, boundaryCondition=["remove"])   # Remove border-touching objects
 
     # Map the labels to 1 + label_nr (shift all by 1)
     labels_internalobjects = dip.ListObjectLabels(L_internalobjects)    # BG 0 i not included
+    # Return upon empty list of internal objects (no pores)
+    if len(labels_internalobjects) == 0:
+        return mask
     lut = np.zeros(len(labels_internalobjects) + 1, dtype=np.uint32)
     lut[1:] = np.array(labels_internalobjects) + 1
     L_internalobjects = dip.LookupTable(lut).Apply(L_internalobjects)
@@ -60,6 +63,7 @@ def fillCavities(mask):
     L_closed = dip.Relabel(L_object_and_internals,MSF_solid_and_internals)
     B_closed = L_closed > 0
     return B_closed
+
 
 def segmentAir(img, max_rho: int = 1500):
     '''Segment air from wood using intermode threshold and fill holes.'''
