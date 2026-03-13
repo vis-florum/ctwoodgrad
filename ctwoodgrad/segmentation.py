@@ -7,6 +7,7 @@ import logging
 
 MAX_WORKERS = 8
 LOWER_BOUND = 100
+MODEBOUND = 200
 LATEWOOD = 500
 UPPER_BOUND = 1500
 
@@ -15,7 +16,7 @@ UPPER_BOUND = 1500
 
 def findInterMode(img, rho_min, rho_max):
     '''Find the minimum between two modes of the image histogram'''
-    logging.debug("Finding inter modes...")
+    # logging.debug("Finding inter modes...")
 
     mask = (img >= rho_min) & (img <= rho_max)
     if not np.any(mask):  # Avoid errors if no pixels in range
@@ -58,8 +59,9 @@ def get_thresholds_slicewise_MT(img_np, lower, latewood, max_workers=None):
     return ts
 
 
-def threshold_slicewise_MT(img_np, lower=LOWER_BOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=None):
+def threshold_slicewise_MT(img_np, lower=LOWER_BOUND, intermode_limit=MODEBOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=None):
     ts = get_thresholds_slicewise_MT(img_np, lower, latewood, max_workers=max_workers)
+    ts[ts>MODEBOUND] = LOWER_BOUND   # Handle edges which otherwise get degraded
     thresh = ts[None, None, :]
     mask = (img_np >= thresh) & (img_np <= upper)
     return mask, ts
@@ -140,8 +142,8 @@ def segment_wood_volumewise(img, upper: int = UPPER_BOUND):
     return np.asarray(mask), t_w
 
 
-def segment_wood_slicewise(img_np, lower=LOWER_BOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=MAX_WORKERS):
-    M_np, ts = threshold_slicewise_MT(img_np, lower=lower, latewood=latewood, upper=upper, max_workers=max_workers)
+def segment_wood_slicewise(img_np, lower=LOWER_BOUND, intermode_limit=MODEBOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=MAX_WORKERS):
+    M_np, ts = threshold_slicewise_MT(img_np, lower=lower, intermode_limit=intermode_limit, latewood=latewood, upper=upper, max_workers=max_workers)
 
     M_dip = dip.Image(M_np)
     M_dip = dip.Opening(M_dip)
