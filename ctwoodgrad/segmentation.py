@@ -142,7 +142,7 @@ def segment_wood_volumewise(img, upper: int = UPPER_BOUND):
     return np.asarray(mask), t_w
 
 
-def segment_wood_slicewise(img_np, lower=LOWER_BOUND, intermode_limit=MODEBOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=MAX_WORKERS):
+def segment_wood_slicewise(img_np, fill_slicewise: bool = True, lower=LOWER_BOUND, intermode_limit=MODEBOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=MAX_WORKERS):
     M_np, ts = threshold_slicewise_MT(img_np, lower=lower, intermode_limit=intermode_limit, latewood=latewood, upper=upper, max_workers=max_workers)
 
     M_dip = dip.Image(M_np)
@@ -151,7 +151,10 @@ def segment_wood_slicewise(img_np, lower=LOWER_BOUND, intermode_limit=MODEBOUND,
     M_dip = label > 0
     M_np = np.asarray(M_dip, dtype=bool)
 
-    M_np_filled = fill_cavities_slicewise_serial(M_np)
+    if fill_slicewise:
+        M_np_filled = fill_cavities_slicewise_serial(M_np)
+    else:
+        M_np_filled = np.asarray(fillCavities(M_np), dtype=bool)
     
     return M_np_filled, ts
 
