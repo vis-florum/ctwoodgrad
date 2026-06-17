@@ -14,6 +14,44 @@ UPPER_BOUND = 1500
 
 ### BASIC FUNCTIONS
 
+def _normalize_slice_axis(slice_axis, ndim):
+    """Return a positive axis index, or fail before work starts."""
+    if ndim != 3:
+        raise ValueError("Slicewise segmentation expects a 3D numpy array.")
+
+    try:
+        axis = int(slice_axis)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "slice_axis must be an integer axis: 0, 1, 2, or a negative equivalent."
+        ) from exc
+
+    if axis < 0:
+        axis += ndim
+    if axis < 0 or axis >= ndim:
+        raise ValueError(
+            f"slice_axis={slice_axis} is outside the valid axes for shape with {ndim} dimensions."
+        )
+
+    return axis
+
+
+def _as_slices_first(arr, slice_axis):
+    """
+    Put the caller's slice axis first and make each 2D plane contiguous.
+
+    Worker threads then walk memory linearly inside each slice. The caller never
+    sees this internal layout; results are restored before return.
+    """
+    axis = _normalize_slice_axis(slice_axis, arr.ndim)
+    return np.ascontiguousarray(np.moveaxis(arr, axis, 0)), axis
+
+
+def _restore_slice_axis(arr, slice_axis):
+    """Move a slices-first result back to the caller's original axis order."""
+    return np.ascontiguousarray(np.moveaxis(arr, 0, slice_axis))
+
+
 def findInterMode(img, rho_min, rho_max):
     '''Find the minimum between two modes of the image histogram'''
     # logging.debug("Finding inter modes...")
@@ -38,18 +76,25 @@ def findInterMode(img, rho_min, rho_max):
 def get_threshold_slice(args):
     k, slice_np, lower, latewood = args
     t = findInterMode(slice_np, lower, latewood)
+    if t is None:
+        t = np.nan
     return k, t
 
 
-def get_thresholds_slicewise_MT(img_np, lower, latewood, max_workers=None):
-    sz = img_np.shape[2]
+def get_thresholds_slicewise_MT(img_np, lower, latewood, max_workers=None, slice_axis=-1):
+    """
+    Compute one threshold per slice.
+    Pass the axis that indexes slices.
+    """
+    img_slices, _ = _as_slices_first(np.asarray(img_np), slice_axis)
+    sz = img_slices.shape[0]
     ts = np.empty(sz, dtype=np.float64)
 
     if max_workers is None:
         max_workers = min(os.cpu_count() or 1, 8)
 
-    # Send only one 2D slice per task, return only a scalar.
-    jobs = ((k, img_np[:,:,k], lower, latewood) for k in range(sz))
+    # Send one contiguous 2D slice per task; return only the scalar threshold.
+    jobs = ((k, img_slices[k], lower, latewood) for k in range(sz))
     logging.debug(f"Starting multithreaded thresholding with {max_workers} workers...")
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -59,11 +104,35 @@ def get_thresholds_slicewise_MT(img_np, lower, latewood, max_workers=None):
     return ts
 
 
-def threshold_slicewise_MT(img_np, lower=LOWER_BOUND, intermode_limit=MODEBOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=None):
-    ts = get_thresholds_slicewise_MT(img_np, lower, latewood, max_workers=max_workers)
-    ts[ts>MODEBOUND] = LOWER_BOUND   # Handle edges which otherwise get degraded
-    thresh = ts[None, None, :]
-    mask = (img_np >= thresh) & (img_np <= upper)
+def threshold_slicewise_MT(
+    img_np,
+    lower=LOWER_BOUND,
+    intermode_limit=MODEBOUND,
+    latewood=LATEWOOD,
+    upper=UPPER_BOUND,
+    max_workers=None,
+    slice_axis=-1,
+):
+    """
+    Threshold each 2D slice and return a mask in the input axis order.
+
+    slice_axis tells the function where the slice stack lives. Use 0 for
+    SimpleITK-style arrays shaped as (z, y, x); use -1 for (..., z).
+    """
+    img_slices, axis = _as_slices_first(np.asarray(img_np), slice_axis)
+    ts = get_thresholds_slicewise_MT(
+        img_slices,
+        lower,
+        latewood,
+        max_workers=max_workers,
+        slice_axis=0,
+    )
+    ts[(ts > intermode_limit) | np.isnan(ts)] = lower   # Protect weak edge slices.
+
+    # Threshold in slices-first order for fast broadcasting, then restore shape.
+    thresh = ts[:, None, None]
+    mask_slices = (img_slices >= thresh) & (img_slices <= upper)
+    mask = _restore_slice_axis(mask_slices, axis)
     return mask, ts
 
 
@@ -102,11 +171,15 @@ def fillCavities(mask):
 
 
 # Multithreading is not worthwile for filling cavities
-def fill_cavities_slicewise_serial(mask_np):
-    mask_filled = np.empty_like(mask_np, dtype=bool)
-    for k in range(mask_np.shape[2]):
-        mask_filled[:, :, k] = np.asarray(fillCavities(mask_np[:, :, k]), dtype=bool)
-    return mask_filled
+def fill_cavities_slicewise_serial(mask_np, slice_axis=-1):
+    """Fill cavities per 2D slice, preserving the input axis order."""
+    mask_slices, axis = _as_slices_first(np.asarray(mask_np, dtype=bool), slice_axis)
+    mask_filled = np.empty_like(mask_slices, dtype=bool)
+
+    for k in range(mask_slices.shape[0]):
+        mask_filled[k] = np.asarray(fillCavities(mask_slices[k]), dtype=bool)
+
+    return _restore_slice_axis(mask_filled, axis)
 
 
 
@@ -142,8 +215,31 @@ def segment_wood_volumewise(img, upper: int = UPPER_BOUND):
     return np.asarray(mask), t_w
 
 
-def segment_wood_slicewise(img_np, fill_slicewise: bool = True, lower=LOWER_BOUND, intermode_limit=MODEBOUND, latewood=LATEWOOD, upper=UPPER_BOUND, max_workers=MAX_WORKERS):
-    M_np, ts = threshold_slicewise_MT(img_np, lower=lower, intermode_limit=intermode_limit, latewood=latewood, upper=upper, max_workers=max_workers)
+def segment_wood_slicewise(
+    img_np,
+    fill_slicewise: bool = True,
+    lower=LOWER_BOUND,
+    intermode_limit=MODEBOUND,
+    latewood=LATEWOOD,
+    upper=UPPER_BOUND,
+    max_workers=MAX_WORKERS,
+    slice_axis=-1,
+):
+    """
+    Segment wood slice by slice.
+
+    The caller must state which axis indexes slices. Use slice_axis=0 for
+    SimpleITK numpy arrays and slice_axis=-1 for the old last-axis convention.
+    """
+    M_np, ts = threshold_slicewise_MT(
+        img_np,
+        lower=lower,
+        intermode_limit=intermode_limit,
+        latewood=latewood,
+        upper=upper,
+        max_workers=max_workers,
+        slice_axis=slice_axis,
+    )
 
     M_dip = dip.Image(M_np)
     M_dip = dip.Opening(M_dip)
@@ -152,7 +248,7 @@ def segment_wood_slicewise(img_np, fill_slicewise: bool = True, lower=LOWER_BOUN
     M_np = np.asarray(M_dip, dtype=bool)
 
     if fill_slicewise:
-        M_np_filled = fill_cavities_slicewise_serial(M_np)
+        M_np_filled = fill_cavities_slicewise_serial(M_np, slice_axis=slice_axis)
     else:
         M_np_filled = np.asarray(fillCavities(M_np), dtype=bool)
     
