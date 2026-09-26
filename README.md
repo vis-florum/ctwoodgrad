@@ -44,3 +44,30 @@ pip install .
 ```python
 from ctwoodgrad import segmentAir, getFCS
 ```
+
+### Memory-bounded fibre fields
+
+`getFibreTensorForVoxelSize(image, voxel_spacing_mm)` applies the same
+spacing-calibrated gradient and tensor scales used by the CT-Geo pipeline.
+For long volumes, use `staged_fibre_tensor_chunks` to compute overlapping
+chunks and consume only their non-overlapping direction cores:
+
+```python
+from ctwoodgrad import staged_fibre_tensor_chunks
+
+with staged_fibre_tensor_chunks(
+    density, voxel_spacing_mm=0.5, axis=0,
+    chunk_slices=256, workers=4, memory_budget_gb=6,
+    cache_dir="/tmp",
+) as chunks:
+    for chunk in chunks:
+        use(chunk.start, chunk.stop, chunk.radial,
+            chunk.tangential, chunk.longitudinal)
+```
+
+The arrays retain the input's spatial axis order, followed by a three-component
+vector axis. `axis` selects the lengthwise input axis. Each process reads a
+shared scan from a temporary memory-mapped file and writes its core to disk.
+The temporary files are removed when the context exits. `memory_budget_gb` is
+an estimated budget **per worker**, not a hard OS limit; an oversized chunk is
+shortened automatically. DIPlib's two Gaussian supports determine the overlap.

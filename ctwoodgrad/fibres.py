@@ -4,6 +4,28 @@ import logging
 
 from .geometry import getSampleAxis
 
+
+def fibre_sigmas_for_spacing(voxel_spacing_mm):
+    """Return the established gradient and tensor scales in voxel units.
+
+    This preserves the historical CT-Geo calibration at 0.3 mm reference
+    spacing. Keeping it here makes the scale choice shared by full-volume and
+    chunked fibre calculations.
+    """
+    voxel_spacing_mm = float(voxel_spacing_mm)
+    if not np.isfinite(voxel_spacing_mm) or voxel_spacing_mm <= 0:
+        raise ValueError("voxel_spacing_mm must be a positive finite number")
+    return round(0.7 * voxel_spacing_mm / 0.3, 1), round(1.5 * voxel_spacing_mm / 0.3, 1)
+
+
+def _fibre_tensor_from_normalized(imgn, sigma, omega):
+    """The shared DIPlib tensor and eigenvector calculation."""
+    g = dip.Gradient(imgn, sigmas=sigma)
+    S = g @ dip.Transpose(g)
+    dip.Gauss(S, out=S, sigmas=omega)
+    _, eigenvectors = dip.EigenDecomposition(S)
+    return tuple(eigenvectors.TensorColumn(index) for index in range(3))
+
 def getFCS(img, sigma=.7, omega=1.5):
 #def getFCS(img, sigma=3, omega=5.0):    # wide annual rings oak
 #def getFCS(img, sigma=1.5, omega=3.0):    # small annual rings oak
@@ -12,13 +34,7 @@ def getFCS(img, sigma=.7, omega=1.5):
     imgn = img - np.min(img)
     imgn = imgn / np.max(imgn)
 
-    g = dip.Gradient(imgn,sigmas=sigma)
-    S = g @ dip.Transpose(g)
-    dip.Gauss(S, out=S, sigmas=omega)
-    eigenvalues, eigenvectors = dip.EigenDecomposition(S)
-    v1 = eigenvectors.TensorColumn(0)
-    v2 = eigenvectors.TensorColumn(1)
-    v3 = eigenvectors.TensorColumn(2)
+    v1, v2, v3 = _fibre_tensor_from_normalized(imgn, sigma, omega)
     #energy, cyl, plan = dip.StructureTensorAnalysis(S,outputs=["energy", "cylindrical", "planar"])
 
     return v1,v2,v3,# energy, cyl, plan
@@ -32,6 +48,12 @@ def getFibreTensor(img, sigma=.7, omega=1.5):
     except Exception as e:
         logging.error(f"getFibreTensor failed: {e}")
         return None, None, None
+
+
+def getFibreTensorForVoxelSize(img, voxel_spacing_mm):
+    """Full-volume fibre tensor with the established spacing calibration."""
+    sigma, omega = fibre_sigmas_for_spacing(voxel_spacing_mm)
+    return getFibreTensor(img, sigma=sigma, omega=omega)
 
 
 def projectDipDir(dipL, ax):
