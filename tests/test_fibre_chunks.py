@@ -27,7 +27,8 @@ class FibreChunkTests(unittest.TestCase):
             reconstructed = [np.empty((*data.shape, 3), dtype=np.float32) for _ in range(3)]
             with tempfile.TemporaryDirectory() as temporary:
                 cache = Path(temporary)
-                with staged_fibre_tensor_chunks(data, 0.5, axis=axis, chunk_slices=19,
+                with staged_fibre_tensor_chunks(data, sigma=1.2, omega=2.5,
+                                                axis=axis, chunk_slices=19,
                                                 workers=2, memory_budget_gb=1,
                                                 cache_dir=cache) as chunks:
                     intervals = []
@@ -48,7 +49,8 @@ class FibreChunkTests(unittest.TestCase):
     def test_chunk_size_adapts_to_budget(self):
         scan = np.random.default_rng(3).normal(size=(60, 8, 8)).astype(np.float32)
         with tempfile.TemporaryDirectory() as temporary:
-            with staged_fibre_tensor_chunks(scan, 0.3, chunk_slices=20,
+            with staged_fibre_tensor_chunks(scan, sigma=0.7, omega=1.5,
+                                            chunk_slices=20,
                                             memory_budget_gb=.0003,
                                             cache_dir=temporary) as chunks:
                 intervals = [(chunk.start, chunk.stop) for chunk in chunks]

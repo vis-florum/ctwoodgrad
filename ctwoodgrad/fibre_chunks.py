@@ -14,7 +14,7 @@ import tempfile
 import diplib as dip
 import numpy as np
 
-from .fibres import _fibre_tensor_from_normalized, fibre_sigmas_for_spacing
+from .fibres import _fibre_tensor_from_normalized
 
 
 @dataclass(frozen=True)
@@ -157,7 +157,7 @@ def _iter_staged_chunks(chunks, destination, axis):
 
 
 @contextmanager
-def staged_fibre_tensor_chunks(density, voxel_spacing_mm, *, axis=0,
+def staged_fibre_tensor_chunks(density, sigma, omega, *, axis=0,
                                chunk_slices=256, workers=1, memory_budget_gb=6.0,
                                cache_dir=None):
     """Yield disk-backed direction chunks with global normalization.
@@ -176,7 +176,8 @@ def staged_fibre_tensor_chunks(density, voxel_spacing_mm, *, axis=0,
         raise ValueError("axis must identify one of the three density dimensions")
     if chunk_slices < 1 or workers < 1 or memory_budget_gb <= 0:
         raise ValueError("chunk_slices, workers, and memory_budget_gb must be positive")
-    sigma, omega = fibre_sigmas_for_spacing(voxel_spacing_mm)
+    if not math.isfinite(sigma) or not math.isfinite(omega) or sigma <= 0 or omega <= 0:
+        raise ValueError("sigma and omega must be positive finite numbers")
     cache_parent = Path(cache_dir) if cache_dir is not None else None
     if cache_parent is not None:
         cache_parent.mkdir(parents=True, exist_ok=True)
